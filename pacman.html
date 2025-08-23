@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pac-Man</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      overflow: hidden;
+    }
+    #gameCanvas {
+      display: block;
+      margin: 50px auto;
+      background: black;
+    }
+    #scoreBoard {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-family: Arial, sans-serif;
+      font-size: 20px;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="scoreBoard">Score: 0   Lives: 3</div>
+  <canvas id="gameCanvas" width="560" height="500"></canvas>
+  <!-- Sound effects (using minimal data URIs) -->
+  <audio id="wakaSound" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="></audio>
+  <audio id="eatGhostSound" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="></audio>
+  <audio id="deathSound" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="></audio>
+  <script>
+    "use strict";
+
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const tileSize = 20;
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+
+    // Maze layout: 25 rows x 28 columns
+    const mazeStrings = [
+      "############################",
+      "#............##............#",
+      "#.####.#####.##.#####.####.#",
+      "#o####.#####.##.#####.####o#",
+      "#.####.#####.##.#####.####.#",
+      "#..........................#",
+      "#.####.##.########.##.####.#",
+      "#.####.##.########.##.####.#",
+      "#......##....##....##......#",
+      "######.##### ## #####.######",
+      "     #.##### ## #####.#     ",
+      "     #.##          ##.#     ",
+      "     #.## ###--### ##.#     ",
+      "######.## #      # ##.######",
+      "       .  #      #  .       ",
+      "######.## #      # ##.######",
+      "     #.## ######## ##.#     ",
+      "     #.##          ##.#     ",
+      "     #.## ######## ##.#     ",
+      "######.## ######## ##.######",
+      "#............##............#",
+      "#.####.#####.##.#####.####.#",
+      "#o..##................##..o#",
+      "###.##.##.########.##.##.###",
+      "#......##....##....##......#",
+      "############################"
+    ];
+    const mazeRows = mazeStrings.length;
+    const mazeCols = mazeStrings[0].length;
+    // Convert maze strings into a 2D array for mutability.
+    let maze = mazeStrings.map(row => row.split(''));
+
+    // Directions
+    const directions = {
+      left:  { x: -1, y: 0 },
+      right: { x:  1, y: 0 },
+      up:    { x:  0, y: -1 },
+      down:  { x:  0, y:  1 }
+    };
+
+    // Pac-Man object (starting at cell 14,23)
+    let pacman = {
+      x: 14 * tileSize + tileSize / 2,
+      y: 23 * tileSize + tileSize / 2,
+      direction: { x: 0, y: 0 },
+      nextDirection: { x: 0, y: 0 },
+      speed: 2,
+      mouthOpen: true,
+      mouthTimer: 0
+    };
+
+    // Ghost class
+    class Ghost {
+      constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.startX = x;
+        this.startY = y;
+        this.color = color;
+        this.direction = this.randomDirection();
+        this.speed = 2;
+        this.isVulnerable = false;
+        this.vulnerableTimer = 0;
+      }
+      randomDirection() {
+        const dirs = Object.values(directions);
+        return dirs[Math.floor(Math.random() * dirs.length)];
+      }
+      reset() {
+        this.x = this.startX;
+        this.y = this.startY;
+        this.direction = this.randomDirection();
+        this.isVulnerable = false;
+        this.vulnerableTimer = 0;
+      }
+    }
+
+    // Create four ghosts with different colors and starting positions.
+    let ghosts = [];
+    ghosts.push(new Ghost(13 * tileSize + tileSize/2, 11 * tileSize + tileSize/2, "red"));
+    ghosts.push(new Ghost(14 * tileSize + tileSize/2, 11 * tileSize + tileSize/2, "pink"));
+    ghosts.push(new Ghost(13 * tileSize + tileSize/2, 14 * tileSize + tileSize/2, "cyan"));
+    ghosts.push(new Ghost(14 * tileSize + tileSize/2, 14 * tileSize + tileSize/2, "orange"));
+
+    // Audio elements
+    const wakaSound = document.getElementById("wakaSound");
+    const eatGhostSound = document.getElementById("eatGhostSound");
+    const deathSound = document.getElementById("deathSound");
+    function playSound(audio) {
+      audio.currentTime = 0;
+      audio.play();
+    }
+
+    // Check if a cell (column, row) is walkable (not a wall)
+    function isWalkable(col, row) {
+      if (col < 0 || col >= mazeCols || row < 0 || row >= mazeRows) return false;
+      const cell = maze[row][col];
+      return cell !== '#' && cell !== undefined;
+    }
+
+    // Get center pixel of a given cell.
+    function cellCenter(col, row) {
+      return { x: col * tileSize + tileSize / 2, y: row * tileSize + tileSize / 2 };
+    }
+
+    // Update Pac-Man's movement.
+    function updatePacman() {
+      let col = Math.floor(pacman.x / tileSize);
+      let row = Math.floor(pacman.y / tileSize);
+      let center = cellCenter(col, row);
+      // If centered, allow direction change.
+      if (Math.abs(pacman.x - center.x) < pacman.speed && Math.abs(pacman.y - center.y) < pacman.speed) {
+        pacman.x = center.x;
+        pacman.y = center.y;
+        let desiredCol = col + pacman.nextDirection.x;
+        let desiredRow = row + pacman.nextDirection.y;
+        if (isWalkable(desiredCol, desiredRow)) {
+          pacman.direction = pacman.nextDirection;
+        }
+        let nextCol = col + pacman.direction.x;
+        let nextRow = row + pacman.direction.y;
+        if (!isWalkable(nextCol, nextRow)) {
+          pacman.direction = { x: 0, y: 0 };
+        }
+        // Eat pellets or power pellets.
+        let cell = maze[row][col];
+        if (cell === '.' || cell === 'o') {
+          maze[row][col] = ' ';
+          score += (cell === '.') ? 10 : 50;
+          playSound(wakaSound);
+          if (cell === 'o') {
+            ghosts.forEach(g => {
+              g.isVulnerable = true;
+              g.vulnerableTimer = 300; // frames of vulnerability
+            });
+          }
+        }
+      }
+      pacman.x += pacman.direction.x * pacman.speed;
+      pacman.y += pacman.direction.y * pacman.speed;
+      // Tunnel teleportation (left/right)
+      if (pacman.x < -tileSize/2) pacman.x = canvas.width + tileSize/2;
+      if (pacman.x > canvas.width + tileSize/2) pacman.x = -tileSize/2;
+    }
+
+    // Update ghosts' movements.
+    function updateGhosts() {
+      ghosts.forEach(ghost => {
+        let col = Math.floor(ghost.x / tileSize);
+        let row = Math.floor(ghost.y / tileSize);
+        let center = cellCenter(col, row);
+        if (Math.abs(ghost.x - center.x) < ghost.speed && Math.abs(ghost.y - center.y) < ghost.speed) {
+          ghost.x = center.x;
+          ghost.y = center.y;
+          let possibleDirs = [];
+          for (let key in directions) {
+            let d = directions[key];
+            if (ghost.direction.x === -d.x && ghost.direction.y === -d.y) continue;
+            let nextCol = col + d.x;
+            let nextRow = row + d.y;
+            if (isWalkable(nextCol, nextRow)) {
+              possibleDirs.push(d);
+            }
+          }
+          if (possibleDirs.length > 0) {
+            ghost.direction = possibleDirs[Math.floor(Math.random() * possibleDirs.length)];
+          } else {
+            ghost.direction = { x: -ghost.direction.x, y: -ghost.direction.y };
+          }
+        }
+        ghost.x += ghost.direction.x * ghost.speed;
+        ghost.y += ghost.direction.y * ghost.speed;
+        if (ghost.x < -tileSize/2) ghost.x = canvas.width + tileSize/2;
+        if (ghost.x > canvas.width + tileSize/2) ghost.x = -tileSize/2;
+        if (ghost.isVulnerable) {
+          ghost.vulnerableTimer--;
+          if (ghost.vulnerableTimer <= 0) ghost.isVulnerable = false;
+        }
+      });
+    }
+
+    // Check collisions between Pac-Man and ghosts.
+    function checkCollisions() {
+      ghosts.forEach(ghost => {
+        let dx = pacman.x - ghost.x;
+        let dy = pacman.y - ghost.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < tileSize / 2) {
+          if (ghost.isVulnerable) {
+            score += 200;
+            playSound(eatGhostSound);
+            ghost.reset();
+          } else {
+            playSound(deathSound);
+            lives--;
+            resetPositions();
+            if (lives <= 0) gameOver = true;
+          }
+        }
+      });
+    }
+
+    // Reset positions of Pac-Man and ghosts after death.
+    function resetPositions() {
+      pacman.x = 14 * tileSize + tileSize / 2;
+      pacman.y = 23 * tileSize + tileSize / 2;
+      pacman.direction = { x: 0, y: 0 };
+      pacman.nextDirection = { x: 0, y: 0 };
+      ghosts.forEach(g => g.reset());
+    }
+
+    // Draw the maze, walls and pellets.
+    function drawMaze() {
+      for (let row = 0; row < mazeRows; row++) {
+        for (let col = 0; col < mazeCols; col++) {
+          let cell = maze[row][col];
+          let x = col * tileSize;
+          let y = row * tileSize;
+          if (cell === '#') {
+            ctx.fillStyle = "blue";
+            ctx.fillRect(x, y, tileSize, tileSize);
+          } else if (cell === '.') {
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(x + tileSize/2, y + tileSize/2, 3, 0, 2 * Math.PI);
+            ctx.fill();
+          } else if (cell === 'o') {
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(x + tileSize/2, y + tileSize/2, 6, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // Draw Pac-Man with an animated mouth.
+    function drawPacman() {
+      ctx.fillStyle = "yellow";
+      ctx.beginPath();
+      let angle = pacman.mouthOpen ? 0.25 * Math.PI : 0;
+      ctx.moveTo(pacman.x, pacman.y);
+      ctx.arc(pacman.x, pacman.y, tileSize/2, angle, 2 * Math.PI - angle);
+      ctx.fill();
+    }
+
+    // Draw the ghosts.
+    function drawGhosts() {
+      ghosts.forEach(ghost => {
+        ctx.fillStyle = ghost.isVulnerable ? "blue" : ghost.color;
+        ctx.beginPath();
+        let r = tileSize / 2;
+        // Draw ghost head (arc) and body (polygon with waves)
+        ctx.arc(ghost.x, ghost.y, r, Math.PI, 0, false);
+        ctx.lineTo(ghost.x + r, ghost.y + r);
+        let waves = 4;
+        for (let i = 0; i <= waves; i++) {
+          let posX = ghost.x + r - (2 * r * i / waves);
+          let posY = ghost.y + r + (i % 2 === 0 ? 5 : -5);
+          ctx.lineTo(posX, posY);
+        }
+        ctx.closePath();
+        ctx.fill();
+        // Eyes
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(ghost.x - 5, ghost.y - 2, 3, 0, 2 * Math.PI);
+        ctx.arc(ghost.x + 5, ghost.y - 2, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = "black";
+        ctx.beginPath();
+        ctx.arc(ghost.x - 5, ghost.y - 2, 1.5, 0, 2 * Math.PI);
+        ctx.arc(ghost.x + 5, ghost.y - 2, 1.5, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
+
+    // Update scoreboard.
+    function updateScoreBoard() {
+      document.getElementById("scoreBoard").innerText = "Score: " + score + "   Lives: " + lives;
+    }
+
+    // Main game loop.
+    function gameLoop() {
+      if (gameOver) {
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "red";
+        ctx.font = "40px Arial";
+        ctx.fillText("GAME OVER", canvas.width/2 - 100, canvas.height/2);
+        return;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawMaze();
+      updatePacman();
+      updateGhosts();
+      checkCollisions();
+      drawPacman();
+      drawGhosts();
+      updateScoreBoard();
+      // Toggle mouth animation.
+      pacman.mouthTimer++;
+      if (pacman.mouthTimer % 10 === 0) {
+        pacman.mouthOpen = !pacman.mouthOpen;
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Keyboard input.
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "ArrowLeft") {
+        pacman.nextDirection = directions.left;
+      } else if (e.key === "ArrowRight") {
+        pacman.nextDirection = directions.right;
+      } else if (e.key === "ArrowUp") {
+        pacman.nextDirection = directions.up;
+      } else if (e.key === "ArrowDown") {
+        pacman.nextDirection = directions.down;
+      }
+    });
+
+    gameLoop();
+  </script>
+</body>
+</html>

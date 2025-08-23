@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pac-Man Enhanced</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      overflow: hidden;
+      font-family: 'Arial', sans-serif;
+    }
+    #gameCanvas {
+      display: block;
+      margin: 50px auto;
+      background: black;
+    }
+    #scoreBoard {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-size: 20px;
+      z-index: 10;
+      text-shadow: 2px 2px 2px blue;
+    }
+    #menu {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: white;
+      z-index: 20;
+    }
+    .hidden {
+      display: none;
+    }
+    button {
+      padding: 15px 30px;
+      font-size: 20px;
+      background: yellow;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="scoreBoard">Score: 0 | High Score: 0 | Lives: 3</div>
+  <div id="menu">
+    <h1>PAC-MAN</h1>
+    <button id="startButton">Play Game</button>
+    <p>Use arrow keys to move</p>
+  </div>
+  <canvas id="gameCanvas" width="560" height="620"></canvas>
+  <script>
+    "use strict";
+
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const tileSize = 20;
+    let score = 0;
+    let highScore = localStorage.getItem('pacmanHighScore') || 0;
+    let lives = 3;
+    let gameOver = false;
+    let gameStarted = false;
+
+    // Maze layout
+    const mazeStrings = [
+      "############################",
+      "#............##............#",
+      "#.####.#####.##.#####.####.#",
+      "#o####.#####.##.#####.####o#",
+      "#.####.#####.##.#####.####.#",
+      "#..........................#",
+      "#.####.##.########.##.####.#",
+      "#.####.##.########.##.####.#",
+      "#......##....##....##......#",
+      "######.##### ## #####.######",
+      "     #.##### ## #####.#     ",
+      "     #.##          ##.#     ",
+      "     #.## ###--### ##.#     ",
+      "######.## #      # ##.######",
+      "       .  #      #  .       ",
+      "######.## #      # ##.######",
+      "     #.## ######## ##.#     ",
+      "     #.##          ##.#     ",
+      "     #.## ######## ##.#     ",
+      "######.## ######## ##.######",
+      "#............##............#",
+      "#.####.#####.##.#####.####.#",
+      "#o..##................##..o#",
+      "###.##.##.########.##.##.###",
+      "#......##....##....##......#",
+      "############################"
+    ];
+    const mazeRows = mazeStrings.length;
+    const mazeCols = mazeStrings[0].length;
+    let maze = mazeStrings.map(row => row.split(''));
+
+    // Directions
+    const directions = {
+      left: { x: -1, y: 0 },
+      right: { x: 1, y: 0 },
+      up: { x: 0, y: -1 },
+      down: { x: 0, y: 1 }
+    };
+
+    // Pac-Man object
+    let pacman = {
+      x: 14 * tileSize + tileSize / 2,
+      y: 23 * tileSize + tileSize / 2,
+      direction: { x: 0, y: 0 },
+      nextDirection: { x: 0, y: 0 },
+      speed: 2,
+      mouthOpen: true,
+      mouthTimer: 0
+    };
+
+    // Ghost class
+    class Ghost {
+      constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.direction = { x: 0, y: 0 };
+        this.speed = 1.8;
+        this.isVulnerable = false;
+        this.vulnerableTimer = 0;
+      }
+
+      reset() {
+        this.x = 14 * tileSize + tileSize / 2;
+        this.y = 11 * tileSize + tileSize / 2;
+        this.direction = { x: 0, y: 0 };
+        this.isVulnerable = false;
+        this.vulnerableTimer = 0;
+      }
+    }
+
+    // Create ghosts
+    let ghosts = [
+      new Ghost(13 * tileSize, 11 * tileSize, "red"),
+      new Ghost(14 * tileSize, 11 * tileSize, "pink"),
+      new Ghost(13 * tileSize, 14 * tileSize, "cyan"),
+      new Ghost(14 * tileSize, 14 * tileSize, "orange")
+    ];
+
+    // Check if a cell is walkable
+    function isWalkable(col, row) {
+      if (col < 0 || col >= mazeCols || row < 0 || row >= mazeRows) return false;
+      const cell = maze[row][col];
+      return cell !== '#' && cell !== undefined;
+    }
+
+    // Update Pac-Man
+    function updatePacman() {
+      let col = Math.floor(pacman.x / tileSize);
+      let row = Math.floor(pacman.y / tileSize);
+      let center = { x: col * tileSize + tileSize / 2, y: row * tileSize + tileSize / 2 };
+
+      if (Math.abs(pacman.x - center.x) < pacman.speed && Math.abs(pacman.y - center.y) < pacman.speed) {
+        pacman.x = center.x;
+        pacman.y = center.y;
+
+        let desiredCol = col + pacman.nextDirection.x;
+        let desiredRow = row + pacman.nextDirection.y;
+        if (isWalkable(desiredCol, desiredRow)) {
+          pacman.direction = pacman.nextDirection;
+        }
+
+        let nextCol = col + pacman.direction.x;
+        let nextRow = row + pacman.direction.y;
+        if (!isWalkable(nextCol, nextRow)) {
+          pacman.direction = { x: 0, y: 0 };
+        }
+
+        // Eat pellets
+        let cell = maze[row][col];
+        if (cell === '.' || cell === 'o') {
+          maze[row][col] = ' ';
+          score += (cell === '.') ? 10 : 50;
+          if (cell === 'o') {
+            ghosts.forEach(g => {
+              g.isVulnerable = true;
+              g.vulnerableTimer = 300;
+            });
+          }
+        }
+      }
+
+      pacman.x += pacman.direction.x * pacman.speed;
+      pacman.y += pacman.direction.y * pacman.speed;
+
+      // Tunnel teleportation
+      if (pacman.x < -tileSize / 2) pacman.x = canvas.width + tileSize / 2;
+      if (pacman.x > canvas.width + tileSize / 2) pacman.x = -tileSize / 2;
+    }
+
+    // Update ghosts
+    function updateGhosts() {
+      ghosts.forEach(ghost => {
+        if (ghost.isVulnerable) {
+          ghost.vulnerableTimer--;
+          if (ghost.vulnerableTimer <= 0) ghost.isVulnerable = false;
+        }
+
+        let col = Math.floor(ghost.x / tileSize);
+        let row = Math.floor(ghost.y / tileSize);
+        let center = { x: col * tileSize + tileSize / 2, y: row * tileSize + tileSize / 2 };
+
+        if (Math.abs(ghost.x - center.x) < ghost.speed && Math.abs(ghost.y - center.y) < ghost.speed) {
+          ghost.x = center.x;
+          ghost.y = center.y;
+
+          let possibleDirs = [];
+          for (let key in directions) {
+            let d = directions[key];
+            if (ghost.direction.x === -d.x && ghost.direction.y === -d.y) continue;
+            let nextCol = col + d.x;
+            let nextRow = row + d.y;
+            if (isWalkable(nextCol, nextRow)) {
+              possibleDirs.push(d);
+            }
+          }
+
+          if (possibleDirs.length > 0) {
+            ghost.direction = possibleDirs[Math.floor(Math.random() * possibleDirs.length)];
+          } else {
+            ghost.direction = { x: -ghost.direction.x, y: -ghost.direction.y };
+          }
+        }
+
+        ghost.x += ghost.direction.x * ghost.speed;
+        ghost.y += ghost.direction.y * ghost.speed;
+
+        // Tunnel teleportation
+        if (ghost.x < -tileSize / 2) ghost.x = canvas.width + tileSize / 2;
+        if (ghost.x > canvas.width + tileSize / 2) ghost.x = -tileSize / 2;
+      });
+    }
+
+    // Check collisions
+    function checkCollisions() {
+      ghosts.forEach(ghost => {
+        let dx = pacman.x - ghost.x;
+        let dy = pacman.y - ghost.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < tileSize / 2) {
+          if (ghost.isVulnerable) {
+            score += 200;
+            ghost.reset();
+          } else {
+            lives--;
+            resetPositions();
+            if (lives <= 0) gameOver = true;
+          }
+        }
+      });
+    }
+
+    // Reset positions
+    function resetPositions() {
+      pacman.x = 14 * tileSize + tileSize / 2;
+      pacman.y = 23 * tileSize + tileSize / 2;
+      pacman.direction = { x: 0, y: 0 };
+      pacman.nextDirection = { x: 0, y: 0 };
+      ghosts.forEach(g => g.reset());
+    }
+
+    // Draw maze
+    function drawMaze() {
+      for (let row = 0; row < mazeRows; row++) {
+        for (let col = 0; col < mazeCols; col++) {
+          let cell = maze[row][col];
+          let x = col * tileSize;
+          let y = row * tileSize;
+
+          if (cell === '#') {
+            ctx.fillStyle = "blue";
+            ctx.fillRect(x, y, tileSize, tileSize);
+          } else if (cell === '.') {
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(x + tileSize / 2, y + tileSize / 2, 3, 0, 2 * Math.PI);
+            ctx.fill();
+          } else if (cell === 'o') {
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(x + tileSize / 2, y + tileSize / 2, 6, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // Draw Pac-Man
+    function drawPacman() {
+      ctx.fillStyle = "yellow";
+      ctx.beginPath();
+      let angle = pacman.mouthOpen ? 0.25 * Math.PI : 0;
+      ctx.moveTo(pacman.x, pacman.y);
+      ctx.arc(pacman.x, pacman.y, tileSize / 2, angle, 2 * Math.PI - angle);
+      ctx.fill();
+    }
+
+    // Draw ghosts
+    function drawGhosts() {
+      ghosts.forEach(ghost => {
+        ctx.fillStyle = ghost.isVulnerable ? "blue" : ghost.color;
+        ctx.beginPath();
+        ctx.arc(ghost.x, ghost.y, tileSize / 2, Math.PI, 0, false);
+        ctx.lineTo(ghost.x + tileSize / 2, ghost.y + tileSize / 2);
+        ctx.lineTo(ghost.x - tileSize / 2, ghost.y + tileSize / 2);
+        ctx.closePath();
+        ctx.fill();
+      });
+    }
+
+    // Update scoreboard
+    function updateScoreBoard() {
+      document.getElementById("scoreBoard").innerText = `Score: ${score} | High Score: ${highScore} | Lives: ${lives}`;
+    }
+
+    // Game loop
+    function gameLoop() {
+      if (!gameStarted) return;
+
+      if (gameOver) {
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "red";
+        ctx.font = "40px Arial";
+        ctx.fillText("GAME OVER", canvas.width / 2 - 100, canvas.height / 2);
+        return;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawMaze();
+      updatePacman();
+      updateGhosts();
+      checkCollisions();
+      drawPacman();
+      drawGhosts();
+      updateScoreBoard();
+
+      // Toggle mouth animation
+      pacman.mouthTimer++;
+      if (pacman.mouthTimer % 10 === 0) {
+        pacman.mouthOpen = !pacman.mouthOpen;
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Keyboard input
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft") pacman.nextDirection = directions.left;
+      if (e.key === "ArrowRight") pacman.nextDirection = directions.right;
+      if (e.key === "ArrowUp") pacman.nextDirection = directions.up;
+      if (e.key === "ArrowDown") pacman.nextDirection = directions.down;
+    });
+
+    // Start game
+    document.getElementById("startButton").addEventListener("click", () => {
+      gameStarted = true;
+      document.getElementById("menu").classList.add("hidden");
+      gameLoop();
+    });
+  </script>
+</body>
+</html>
